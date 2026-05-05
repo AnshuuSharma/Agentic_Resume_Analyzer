@@ -1,0 +1,9 @@
+langgraph
+flask
+python-dotenv
+google-genai
+langsmith
+python-docx
+pymupdf
+python-multipart
+httpx
