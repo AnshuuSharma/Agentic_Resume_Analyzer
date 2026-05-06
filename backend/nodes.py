@@ -1,5 +1,10 @@
 from utils import client , AgentState
 import json
+from tools import (
+    check_ats_compatibility,
+    search_job_market,
+    find_youtube_resources
+)
 
 
 def clean_llm_json(text: str) -> str:
@@ -65,6 +70,9 @@ Job Description:
 
 
 def analyze_node(state : AgentState):
+    tool_results = state.get("tool_results", {})
+    ats = tool_results.get("ats", {})
+    job_market = tool_results.get("job_market", [])
     prompt = f"""
    You are an experienced recruiter.
 
@@ -172,3 +180,81 @@ def route_chat(state: AgentState) -> str:
     if any(trigger in user_msg for trigger in end_triggers):
         return "end"
     return "chat"
+
+from tools import check_ats_compatibility
+
+
+def agent_node(state:AgentState) -> AgentState:
+    """
+    Brain of the agent — decides which tools to call
+    based on extracted resume and JD data
+    """
+    tool_calls=[]
+    
+    if state.get("resume_text") and state.get("jd_text"):
+        tool_calls.append({
+            "tool": "check_ats",
+        })
+
+    resume_skills = [
+        s.lower() for s in
+        state.get("resume_data", {}).get("skills", [])
+    ]
+    required_skills = [
+        s.lower() for s in
+        state.get("jd_data", {}).get("required_skills", [])
+    ]
+
+    missing_skills = [
+        skill for skill in required_skills
+        if skill not in resume_skills
+    ]
+
+    
+    for skill in missing_skills[:3]:
+        tool_calls.append({
+            "tool": "search_job_market",
+            "skill": skill
+        })
+        tool_calls.append({
+            "tool": "find_youtube_resources",
+            "skill": skill
+        })
+
+    return {
+        **state,
+        "tool_calls": tool_calls
+    }
+
+def tool_node(state: AgentState) -> AgentState:
+    """
+    Executes all tools that agent_node decided to call.
+    """
+    tool_results = {
+        "ats": {},
+        "job_market": [],
+        "youtube_resources": []
+    }
+
+    for call in state.get("tool_calls", []):
+        tool = call.get("tool")
+        skill = call.get("skill", "")
+
+        if tool == "check_ats":
+            tool_results["ats"] = check_ats_compatibility(
+                state["resume_text"],
+                state["jd_text"]
+            )
+
+        elif tool == "search_job_market":
+            result = search_job_market(skill)
+            tool_results["job_market"].append(result)
+
+        elif tool == "find_youtube_resources":
+            result = find_youtube_resources(skill)
+            tool_results["youtube_resources"].append(result)
+
+    return {
+        **state,
+        "tool_results": tool_results
+    }

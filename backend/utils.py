@@ -32,6 +32,10 @@ class AgentState(TypedDict):
     #chat
     chat_history:List[dict]
     user_message:str
+    
+    #tools
+    tool_calls: list        
+    tool_results: dict   
 
 import fitz 
 from docx import Document
