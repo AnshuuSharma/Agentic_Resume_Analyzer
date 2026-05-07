@@ -1,5 +1,7 @@
 import os
 import httpx
+from google import genai
+from google.genai import types
 
 def check_ats_compatibility(resume_text:str, jd_text:str)-> dict:
 
@@ -107,4 +109,88 @@ def search_job_market(skill:str,  country:str = "in")-> dict:
             "error": f"Could not fetch job market data: {str(e)}"
         }
 
+def find_youtube_resources(skill: str) -> dict:
+    """
+    Finds top YouTube tutorials for learning a specific skill.
+    Use this when user needs to learn a missing skill from their resume.
+    """
+    try:
+        url = (
+            f"https://www.googleapis.com/youtube/v3/search"
+            f"?part=snippet"
+            f"&q={skill}+tutorial+for+beginners"
+            f"&type=video"
+            f"&maxResults=3"
+            f"&order=relevance"
+            f"&videoDuration=medium"
+            f"&key={os.getenv('YOUTUBE_API_KEY')}"
+        )
+
+        response = httpx.get(url, timeout=10)
+        data = response.json()
+
+        videos = []
+        for item in data.get("items", []):
+            video_id = item["id"]["videoId"]
+            snippet = item["snippet"]
+
+            videos.append({
+                "title": snippet["title"],
+                "channel": snippet["channelTitle"],
+                "description": snippet["description"][:100],
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail": snippet["thumbnails"]["medium"]["url"]
+            })
+
+        return {
+            "skill": skill,
+            "resources": videos,
+            "total_found": len(videos)
+        }
+
+    except Exception as e:
+        return {
+            "skill": skill,
+            "error": f"Could not fetch YouTube resources: {str(e)}"
+        }
     
+tools=types.Tool(function_declaration=[
+    types.FunctionDeclaration(
+        name="check_ats_compatibility",
+        description="""Checks if resume will pass ATS filters.
+        Use this when you need to analyze keyword match between 
+        resume and job description.""",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "resume_text":types.Schema(type=types.Type.STRING),
+                "jd_text":types.Schema(type=types.Type.STRING)
+            },
+            required=["resume_text","jd_text"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="search_job_market",
+        description="""Searches live job postings for a skill.
+        Use this to find how in-demand a missing skill is.""",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "skill":types.Schema(type=types.Type.STRING)
+            },
+            required=["skill"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="find_youtube_resources",
+        description="""Finds YouTube tutorials for learning a skill.
+        Use this when user needs to learn a missing skill.""",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "skill":types.schema(type.Type.STRING)
+            },
+            required=["skill"]
+        )
+    )
+])

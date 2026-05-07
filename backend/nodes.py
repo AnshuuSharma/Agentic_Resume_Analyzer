@@ -1,9 +1,10 @@
-from utils import client , AgentState
+from utils import client ,types, AgentState
 import json
 from tools import (
     check_ats_compatibility,
     search_job_market,
-    find_youtube_resources
+    find_youtube_resources,
+    tools
 )
 
 
@@ -185,46 +186,33 @@ from tools import check_ats_compatibility
 
 
 def agent_node(state:AgentState) -> AgentState:
+    prompt = f"""
+    You are a resume analysis agent.
+    
+    You have access to tools to analyze a resume against a job description.
+    
+    Resume Data: {json.dumps(state["resume_data"], indent=2)}
+    JD Data: {json.dumps(state["jd_data"], indent=2)}
+    
+    Use your tools to gather all necessary information
+    for a comprehensive resume analysis.
+    Identify missing skills and gather market data for each.
     """
-    Brain of the agent — decides which tools to call
-    based on extracted resume and JD data
-    """
+    response=client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(tools=[tools])
+    )
+
     tool_calls=[]
-    
-    if state.get("resume_text") and state.get("jd_text"):
-        tool_calls.append({
-            "tool": "check_ats",
-        })
+    for part in response.candidates[0].content.parts:
+        if hasattr(part,"function_call"):
+            tool_calls.append({
+                "tool":part.function_call.name,
+                "args":dict(part.function_call.args)
+            })
+    return {**state, "tool_calls":tool_calls}
 
-    resume_skills = [
-        s.lower() for s in
-        state.get("resume_data", {}).get("skills", [])
-    ]
-    required_skills = [
-        s.lower() for s in
-        state.get("jd_data", {}).get("required_skills", [])
-    ]
-
-    missing_skills = [
-        skill for skill in required_skills
-        if skill not in resume_skills
-    ]
-
-    
-    for skill in missing_skills[:3]:
-        tool_calls.append({
-            "tool": "search_job_market",
-            "skill": skill
-        })
-        tool_calls.append({
-            "tool": "find_youtube_resources",
-            "skill": skill
-        })
-
-    return {
-        **state,
-        "tool_calls": tool_calls
-    }
 
 def tool_node(state: AgentState) -> AgentState:
     """
