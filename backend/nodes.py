@@ -1,10 +1,9 @@
-from utils import client ,types, AgentState
+from utils import groq_client , AgentState, generate_with_retry
 import json
 from tools import (
     check_ats_compatibility,
     search_job_market,
     find_youtube_resources,
-    tools
 )
 
 
@@ -51,16 +50,13 @@ Job Description:
 """
 
     
-    response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=prompt
-)
+    result = generate_with_retry(prompt)
     
     try:
-        cleaned = clean_llm_json(response.text)
+        cleaned = clean_llm_json(result)
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        parsed = {"error": "invalid json from llm", "raw": response.text}
+        parsed = {"error": "invalid json from llm", "raw": result}
 
     return {
         **state,
@@ -72,10 +68,17 @@ Job Description:
 
 def analyze_node(state : AgentState):
     tool_results = state.get("tool_results", {})
+    print(f"TOOL RESULTS: {json.dumps(tool_results, indent=2)}")
     ats = tool_results.get("ats", {})
     job_market = tool_results.get("job_market", [])
+    youtube = tool_results.get("youtube_resources", [])
     prompt = f"""
-   You are an experienced recruiter.
+   You are an experienced recruiter and career coach.
+    
+    A candidate has submitted their resume for a specific job.
+    You have been provided with structured resume data, job description 
+    data, ATS compatibility results, live job market data, and learning 
+    resources.
 
    Compare the resume data with the job description data and provide detailed, practical feedback.
 
@@ -106,15 +109,29 @@ def analyze_node(state : AgentState):
    Job Description Data:
    {json.dumps(state["jd_data"], indent=2)}
 
+    === ATS COMPATIBILITY RESULTS ===
+    Match Percentage: {ats.get("match_percentage", "N/A")}%
+    ATS Passed: {ats.get("ats_passed", "N/A")}
+    Matched Keywords: {ats.get("matched_keywords", [])}
+    Missing Keywords: {ats.get("missing_keywords", [])}
+    Formatting Issues: {ats.get("formatting_issues", [])}
+
+    === LIVE JOB MARKET DATA FOR MISSING SKILLS ===
+    {json.dumps(job_market, indent=2)}
+
+    === LEARNING RESOURCES FOR MISSING SKILLS ===
+    {json.dumps(youtube, indent=2)}
+
+    Based on all the data above, provide a detailed and actionable 
+    resume analysis. Structure your response however makes most sense 
+    for this specific resume and job description.
+
     """
-    response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=prompt
-)
+    result = generate_with_retry(prompt)
 
     return {
         **state,
-        "analysis": response.text
+        "analysis": result
     }
 
 def compress_history(history: list, max_turns: int = 6) -> list:
@@ -126,7 +143,7 @@ def chat_node(state : AgentState) -> AgentState:
     compressed=compress_history(state["chat_history"])
 
     history_text=""
-    for msg in state["chat_history"]:
+    for msg in compressed:
         role="User" if msg["role"] == "user" else "Assistant"
         history_text += f"{role} : {msg['content']}\n"
 
@@ -159,14 +176,11 @@ def chat_node(state : AgentState) -> AgentState:
       to demonstrate it based on what they do have
     - Be encouraging but honest
     """
-    response=client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=prompt
-)
+    result = generate_with_retry(prompt)
 
     updated_history=state["chat_history"]+[
         {"role":"user","content":state["user_message"]},
-        {"role":"assistant","content":response.text}
+        {"role":"assistant","content":result}
     ]
 
     return {
@@ -182,64 +196,108 @@ def route_chat(state: AgentState) -> str:
         return "end"
     return "chat"
 
-from tools import check_ats_compatibility
-
 
 def agent_node(state:AgentState) -> AgentState:
+    tools = [
+        
+        {
+            "type": "function",
+            "function": {
+                "name": "search_job_market",
+                "description": "Searches live job postings for a skill. Use to find how in-demand a missing skill is.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill": {"type": "string"}
+                    },
+                    "required": ["skill"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "find_youtube_resources",
+                "description": "Finds YouTube tutorials for a skill. Use when user needs to learn a missing skill.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill": {"type": "string"}
+                    },
+                    "required": ["skill"]
+                }
+            }
+        }
+    ]
     prompt = f"""
     You are a resume analysis agent.
     
     You have access to tools to analyze a resume against a job description.
     
-    Resume Data: {json.dumps(state["resume_data"], indent=2)}
-    JD Data: {json.dumps(state["jd_data"], indent=2)}
+    Resume skills: {state["resume_data"].get("skills", [])}
+    Required skills: {state["jd_data"].get("required_skills", [])}
+    Preferred skills: {state["jd_data"].get("preferred_skills", [])}
     
     Use your tools to gather all necessary information
     for a comprehensive resume analysis.
     Identify missing skills and gather market data for each.
     """
-    response=client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(tools=[tools])
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": prompt}],
+        tools=tools,
+        tool_choice="auto",
+        max_tokens=4096
     )
+    
 
-    tool_calls=[]
-    for part in response.candidates[0].content.parts:
-        if hasattr(part,"function_call"):
+    tool_calls = []
+    message = response.choices[0].message
+
+    if message.tool_calls:
+        for tool_call in message.tool_calls:
+            import json as json_module
             tool_calls.append({
-                "tool":part.function_call.name,
-                "args":dict(part.function_call.args)
+                "tool": tool_call.function.name,
+                "args": json_module.loads(tool_call.function.arguments)
             })
-    return {**state, "tool_calls":tool_calls}
+     
+    print(f"TOOL CALLS DECIDED: {tool_calls}")
+
+    return {
+        **state,
+        "tool_calls": tool_calls
+    }
 
 
 def tool_node(state: AgentState) -> AgentState:
-    """
-    Executes all tools that agent_node decided to call.
-    """
     tool_results = {
         "ats": {},
         "job_market": [],
         "youtube_resources": []
     }
 
+    tool_results["ats"] = check_ats_compatibility(
+        state["resume_data"],
+        state["jd_data"]
+    )
+
     for call in state.get("tool_calls", []):
         tool = call.get("tool")
-        skill = call.get("skill", "")
+        args = call.get("args", {})
 
-        if tool == "check_ats":
+        if tool == "check_ats_compatibility":
             tool_results["ats"] = check_ats_compatibility(
-                state["resume_text"],
-                state["jd_text"]
+                args.get("resume_text", state["resume_text"]),
+                args.get("jd_text", state["jd_text"])
             )
 
         elif tool == "search_job_market":
-            result = search_job_market(skill)
+            result = search_job_market(args.get("skill", ""))
             tool_results["job_market"].append(result)
 
         elif tool == "find_youtube_resources":
-            result = find_youtube_resources(skill)
+            result = find_youtube_resources(args.get("skill", ""))
             tool_results["youtube_resources"].append(result)
 
     return {

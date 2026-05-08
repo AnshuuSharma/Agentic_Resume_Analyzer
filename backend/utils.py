@@ -1,12 +1,9 @@
-from google import genai
-from google.genai import types
+from groq import Groq
 from dotenv import load_dotenv
 import os
+import time
 
 load_dotenv()
-
-client=genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-
 
 
 from typing import TypedDict,List
@@ -20,11 +17,6 @@ class AgentState(TypedDict):
     #extraction 
     resume_data:dict
     jd_data:dict
-
-    #tools
-    job_market_result:dict
-    ats_score:dict
-    find_course_result:dict
 
     #analysis
     analysis:str
@@ -89,6 +81,26 @@ def extract_from_docx(file) -> str:
     except Exception as e:
         raise ValueError(f"Could not read DOCX: {str(e)}")
     
-# with open("resume.pdf", "rb") as f:
-#     f.filename = "Anshu_Resume_SE.pdf"
-#     print(extract_text_from_file(f))
+
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+def generate_with_retry(prompt, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            print(f"Attempt {attempt + 1} — calling Groq...")
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4096
+            )
+            print(f"Success on attempt {attempt + 1}")
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"EXACT ERROR: {str(e)}")
+            if "429" in str(e) or "rate" in str(e).lower():
+                wait_time = 15 * (attempt + 1)
+                print(f"Rate limit hit, waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise e
+    raise Exception("Max retries exceeded. Please try again later.")
