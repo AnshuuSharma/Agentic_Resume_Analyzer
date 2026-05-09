@@ -3,6 +3,7 @@ from flask_cors import CORS
 from utils import extract_text_from_file
 from agent import app as graph_app
 import uuid
+import traceback
 
 flask_app = Flask(__name__)
 CORS(flask_app)
@@ -23,7 +24,7 @@ def analyze():
     
   
         session_id = str(uuid.uuid4())
-    
+        print(f"NEW SESSION: {session_id}")
     
         resume_text = extract_text_from_file(resume_file)
      
@@ -47,6 +48,7 @@ def analyze():
         "session_id": session_id  
         })
    except Exception as e:
+        print(f"FULL ERROR: {traceback.format_exc()}")
         return jsonify({
             "error": str(e)
         }), 500
@@ -61,7 +63,10 @@ def chat():
         return jsonify({"error": "session_id is missing"}), 400
     
     
-    user_message = data['message']
+    user_message = data.get('message', '')
+    if not isinstance(user_message, str):
+        return jsonify({"error": "message must be a string"}), 400
+    
     session_id = data['session_id']  # frontend sends this back
     
     config = {"configurable": {"thread_id": session_id}}

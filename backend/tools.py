@@ -2,51 +2,64 @@ import os
 import httpx
 
 
-def check_ats_compatibility(resume_text:str, jd_text:str)-> dict:
+def flatten_list(items: list) -> str:
+    result = []
+    for item in items:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict):
+            result.append(" ".join(str(v) for v in item.values()))
+        else:
+            result.append(str(item))
+    return " ".join(result)
 
-    """
-    checks if resume will pass ATS filters.
-    Analyzes keyword match, formatting issues, and section headings.
-    """
-    resume_lower=resume_text.lower()
-    jd_lower=jd_text.lower()
+def check_ats_compatibility(resume_data: dict, jd_data: dict) -> dict:
+    resume_text = " ".join([
+        flatten_list(resume_data.get("skills", [])),
+        flatten_list(resume_data.get("experience", [])),
+        flatten_list(resume_data.get("education", [])),
+        flatten_list(resume_data.get("projects", [])),
+        flatten_list(resume_data.get("certifications", [])),
+        flatten_list(resume_data.get("achievements", []))
+    ]).lower()
 
-    import re 
-    jd_words=set(re.findall(r'b[a-zA-Z]{4,}\b',jd_lower))
-    resume_Words=set(re.findall(r'b[a-zA-Z]{4,}\b',resume_lower))
+    jd_text = " ".join([
+        flatten_list(jd_data.get("required_skills", [])),
+        flatten_list(jd_data.get("preferred_skills", [])),
+        flatten_list(jd_data.get("qualifications", [])),
+        flatten_list(jd_data.get("responsibilities", []))
+    ]).lower()
 
-    matched_keywords=jd_words & resume_Words
-    missing_keywords=jd_words-resume_Words
+    import re
+    jd_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', jd_text))
+    resume_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', resume_text))
 
-    match_percentage=round(
-        len(matched_keywords)/len(jd_words)*100
-        if jd_words else 0,2
+    matched_keywords = jd_words & resume_words
+    missing_keywords = jd_words - resume_words
+
+    match_percentage = round(
+        len(matched_keywords) / len(jd_words) * 100
+        if jd_words else 0, 2
     )
 
-    formatting_issues=[]
+    formatting_issues = []
+    if not resume_data.get("experience"):
+        formatting_issues.append(
+            "No experience section found — ATS may not detect work history"
+        )
+    if not resume_data.get("skills"):
+        formatting_issues.append(
+            "No skills section found — ATS may miss your technical skills"
+        )
+    if not resume_data.get("education"):
+        formatting_issues.append(
+            "No education section found — ATS may miss qualifications"
+        )
 
-    if "table" in resume_lower or "coulumns" in resume_lower:
-        formatting_issues.append(
-            "Possible table or column layout detected — ATS may misread this"
-        )
-    if not any (heading in resume_lower for heading in ["experience", "education", "skills","projects"]):
-        formatting_issues.append(
-            "Missing standard section headings — ATS may not parse sections correctly"
-        )
-    if resume_text.count("|") > 5:
-        formatting_issues.append(
-            "Too many pipe characters — suggests column layout which confuses ATS"
-        )
-
-    if len(resume_text) < 300:
-        formatting_issues.append(
-            "Resume seems too short — may not have enough content for ATS"
-        )
-    top_missing=sorted(list(missing_keywords))[:15]
-    return{
+    return {
         "match_percentage": match_percentage,
         "matched_keywords": sorted(list(matched_keywords))[:20],
-        "missing_keywords": top_missing,
+        "missing_keywords": sorted(list(missing_keywords))[:15],
         "formatting_issues": formatting_issues,
         "ats_passed": match_percentage >= 60 and len(formatting_issues) == 0
     }

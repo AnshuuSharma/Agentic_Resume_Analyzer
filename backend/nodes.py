@@ -73,7 +73,9 @@ def analyze_node(state : AgentState):
     job_market = tool_results.get("job_market", [])
     youtube = tool_results.get("youtube_resources", [])
     prompt = f"""
-   You are an experienced recruiter and career coach.
+    You are an experienced recruiter and career coach talking directly 
+    to a job candidate. Use "you" and "your" — never refer to them 
+    in third person.
     
     A candidate has submitted their resume for a specific job.
     You have been provided with structured resume data, job description 
@@ -110,12 +112,13 @@ def analyze_node(state : AgentState):
    {json.dumps(state["jd_data"], indent=2)}
 
     === ATS COMPATIBILITY RESULTS ===
-    Match Percentage: {ats.get("match_percentage", "N/A")}%
+    Your resume currently matches {ats.get("match_percentage", "N/A")}% 
+    of the job description keywords.
     ATS Passed: {ats.get("ats_passed", "N/A")}
-    Matched Keywords: {ats.get("matched_keywords", [])}
-    Missing Keywords: {ats.get("missing_keywords", [])}
+    Keywords you are missing: {ats.get("missing_keywords", [])}
     Formatting Issues: {ats.get("formatting_issues", [])}
-
+    Matched Keywords: {ats.get("matched_keywords", [])}
+    
     === LIVE JOB MARKET DATA FOR MISSING SKILLS ===
     {json.dumps(job_market, indent=2)}
 
@@ -125,6 +128,9 @@ def analyze_node(state : AgentState):
     Based on all the data above, provide a detailed and actionable 
     resume analysis. Structure your response however makes most sense 
     for this specific resume and job description.
+    Use all the data provided above including ATS results, job market
+    data and learning resources in your analysis.
+    Include the full YouTube URLs and video title from the learning resources above
 
     """
     result = generate_with_retry(prompt)
@@ -189,7 +195,12 @@ def chat_node(state : AgentState) -> AgentState:
     }
 
 def route_chat(state: AgentState) -> str:
-    user_msg = state["user_message"].lower()
+    user_msg = state.get("user_message", "")
+    
+    if not isinstance(user_msg, str):
+        return "end"
+    
+    user_msg = user_msg.lower()
     end_triggers = ["bye", "exit", "quit", "thanks", "done"]
     
     if any(trigger in user_msg for trigger in end_triggers):
@@ -240,34 +251,39 @@ def agent_node(state:AgentState) -> AgentState:
     
     Use your tools to gather all necessary information
     for a comprehensive resume analysis.
-    Identify missing skills and gather market data for each.
-    """
-    response = groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        tools=tools,
-        tool_choice="auto",
-        max_tokens=4096
-    )
+
+    Return ONLY a valid JSON array of tool calls. No explanation. No markdown.
     
+    Available tools:
+    - search_job_market: searches live job postings for a skill
+    - find_youtube_resources: finds YouTube tutorials for a skill
+    
+    Example output:
+    [
+        {{"tool": "search_job_market", "args": {{"skill": "Docker"}}}},
+        {{"tool": "find_youtube_resources", "args": {{"skill": "Docker"}}}},
+        {{"tool": "search_job_market", "args": {{"skill": "Kubernetes"}}}},
+        {{"tool": "find_youtube_resources", "args": {{"skill": "Kubernetes"}}}}
+    ]
+    
+    Rules:
+    - Only include tools for skills that are genuinely missing from the resume
+    - Maximum 3 missing skills
+    - Return empty array [] if no skills are missing
+    """
+    result = generate_with_retry(prompt)
 
-    tool_calls = []
-    message = response.choices[0].message
+    try:
+        cleaned = clean_llm_json(result)
+        tool_calls = json.loads(cleaned)
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+    except json.JSONDecodeError:
+        print(f"Failed to parse tool calls JSON: {result}")
+        tool_calls = []
 
-    if message.tool_calls:
-        for tool_call in message.tool_calls:
-            import json as json_module
-            tool_calls.append({
-                "tool": tool_call.function.name,
-                "args": json_module.loads(tool_call.function.arguments)
-            })
-     
     print(f"TOOL CALLS DECIDED: {tool_calls}")
-
-    return {
-        **state,
-        "tool_calls": tool_calls
-    }
+    return {**state, "tool_calls": tool_calls}
 
 
 def tool_node(state: AgentState) -> AgentState:
