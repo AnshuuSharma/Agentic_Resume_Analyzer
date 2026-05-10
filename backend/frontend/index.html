@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ResumeIQ — Agentic Resume Analyzer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet"/>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['Syne', 'sans-serif'],
+            body: ['DM Sans', 'sans-serif'],
+          },
+          colors: {
+            ink: '#0d0d0d',
+            paper: '#f5f2eb',
+            accent: '#c8f04a',
+            muted: '#6b6b6b',
+            panel: '#1a1a1a',
+            border: '#2a2a2a',
+            success: '#4ade80',
+            warning: '#fb923c',
+            danger: '#f87171',
+          },
+          animation: {
+            'fade-up': 'fadeUp 0.5s ease forwards',
+            'pulse-dot': 'pulseDot 1.4s ease-in-out infinite',
+            'shimmer': 'shimmer 2s linear infinite',
+          },
+          keyframes: {
+            fadeUp: {
+              '0%': { opacity: '0', transform: 'translateY(16px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+            pulseDot: {
+              '0%, 80%, 100%': { transform: 'scale(0.6)', opacity: '0.4' },
+              '40%': { transform: 'scale(1)', opacity: '1' },
+            },
+            shimmer: {
+              '0%': { backgroundPosition: '-200% 0' },
+              '100%': { backgroundPosition: '200% 0' },
+            },
+          },
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'DM Sans', sans-serif; background: #0d0d0d; color: #f5f2eb; }
+    h1, h2, h3, h4 { font-family: 'Syne', sans-serif; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #1a1a1a; }
+    ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 4px; }
+
+    /* Shimmer loading */
+    .shimmer-line {
+      background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.6s infinite;
+      border-radius: 6px;
+      height: 14px;
+    }
+
+    /* Markdown rendered content */
+    .analysis-content h1,
+    .analysis-content h2,
+    .analysis-content h3 {
+      font-family: 'Syne', sans-serif;
+      color: #c8f04a;
+      margin-top: 1.4em;
+      margin-bottom: 0.5em;
+    }
+    .analysis-content h3 { color: #f5f2eb; font-size: 1rem; }
+    .analysis-content p { margin-bottom: 0.8em; line-height: 1.7; color: #d4d0c8; }
+    .analysis-content ul { padding-left: 1.2em; margin-bottom: 0.8em; }
+    .analysis-content li { margin-bottom: 0.4em; color: #d4d0c8; line-height: 1.6; }
+    .analysis-content strong { color: #f5f2eb; }
+    .analysis-content a { color: #c8f04a; text-decoration: underline; }
+    .analysis-content a:hover { color: #d4ff6a; }
+    .analysis-content code {
+      background: #2a2a2a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      color: #c8f04a;
+    }
+
+    /* File drop zone */
+    .drop-zone { transition: all 0.2s ease; }
+    .drop-zone.drag-over {
+      border-color: #c8f04a !important;
+      background: rgba(200, 240, 74, 0.05) !important;
+    }
+
+    /* Chat bubble */
+    .chat-bubble { animation: fadeUp 0.3s ease forwards; }
+
+    /* Typing indicator dots */
+    .dot { animation: pulseDot 1.4s ease-in-out infinite; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+
+    /* ATS meter */
+    .ats-bar { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
+
+    /* Step indicator */
+    .step-active { color: #c8f04a; }
+    .step-done { color: #4ade80; }
+    .step-pending { color: #3a3a3a; }
+  </style>
+</head>
+<body class="h-screen overflow-hidden flex flex-col">
+
+  <!-- Top bar -->
+  <header class="flex items-center justify-between px-6 py-3 border-b border-border flex-shrink-0" style="background:#111111;">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background:#c8f04a;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0d0d0d" stroke-width="2.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14,2 14,8 20,8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10,9 9,9 8,9"/>
+        </svg>
+      </div>
+      <span class="font-display font-700 text-lg tracking-tight" style="font-weight:700;">ResumeIQ</span>
+      <span class="text-xs px-2 py-0.5 rounded-full border border-border text-muted font-body">Beta</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <div id="status-indicator" class="hidden items-center gap-2 text-xs text-muted">
+        <div class="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></div>
+        <span id="status-text">Ready</span>
+      </div>
+      <button id="reset-btn" onclick="resetApp()"
+        class="hidden text-xs px-3 py-1.5 rounded-lg border border-border text-muted hover:border-accent hover:text-accent transition-all">
+        ↺ New Analysis
+      </button>
+    </div>
+  </header>
+
+  <!-- Main layout -->
+  <main class="flex flex-1 overflow-hidden">
+
+    <!-- LEFT PANEL — Inputs -->
+    <aside id="left-panel" class="w-80 flex-shrink-0 border-r border-border flex flex-col overflow-y-auto" style="background:#111111;">
+      <div class="p-5 flex flex-col gap-5 flex-1">
+
+        <!-- Headline -->
+        <div class="animate-fade-up">
+          <h1 class="font-display text-xl font-800 leading-tight" style="font-weight:800;">
+            Analyze your<br/>
+            <span style="color:#c8f04a;">resume.</span>
+          </h1>
+          <p class="text-xs text-muted mt-1 font-body">Upload your resume and paste the job description to get AI-powered feedback with live market data.</p>
+        </div>
+
+        <!-- Step indicators -->
+        <div id="steps" class="flex flex-col gap-1.5 animate-fade-up">
+          <div class="step-indicator flex items-center gap-2 text-xs" id="step-1">
+            <div class="w-5 h-5 rounded-full border flex items-center justify-center text-xs font-display font-bold step-active border-accent" style="color:#c8f04a; border-color:#c8f04a;">1</div>
+            <span class="step-active" style="color:#c8f04a;">Upload resume</span>
+          </div>
+          <div class="step-indicator flex items-center gap-2 text-xs" id="step-2">
+            <div class="w-5 h-5 rounded-full border flex items-center justify-center text-xs font-display font-bold step-pending border-border">2</div>
+            <span class="step-pending">Paste job description</span>
+          </div>
+          <div class="step-indicator flex items-center gap-2 text-xs" id="step-3">
+            <div class="w-5 h-5 rounded-full border flex items-center justify-center text-xs font-display font-bold step-pending border-border">3</div>
+            <span class="step-pending">Get analysis</span>
+          </div>
+        </div>
+
+        <!-- File upload -->
+        <div class="animate-fade-up">
+          <label class="text-xs font-display font-bold tracking-wide uppercase text-muted mb-2 block">Resume</label>
+          <div id="drop-zone"
+            class="drop-zone border-2 border-dashed border-border rounded-xl p-5 text-center cursor-pointer hover:border-accent transition-all"
+            onclick="document.getElementById('file-input').click()"
+            ondragover="handleDragOver(event)"
+            ondragleave="handleDragLeave(event)"
+            ondrop="handleDrop(event)">
+            <input type="file" id="file-input" class="hidden" accept=".pdf,.docx" onchange="handleFileSelect(event)"/>
+            <div id="upload-placeholder">
+              <div class="w-10 h-10 rounded-lg border border-border flex items-center justify-center mx-auto mb-3">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b6b6b" stroke-width="1.5">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              </div>
+              <p class="text-xs text-muted">Drop your resume here</p>
+              <p class="text-xs" style="color:#3a3a3a;">PDF or DOCX</p>
+            </div>
+            <div id="file-selected" class="hidden">
+              <div class="w-10 h-10 rounded-lg flex items-center justify-center mx-auto mb-2" style="background:rgba(200,240,74,0.1);">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c8f04a" stroke-width="1.5">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14,2 14,8 20,8"/>
+                </svg>
+              </div>
+              <p id="file-name" class="text-xs font-body" style="color:#c8f04a;"></p>
+              <p class="text-xs text-muted mt-0.5">Click to change</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- JD input -->
+        <div class="animate-fade-up flex-1 flex flex-col">
+          <label class="text-xs font-display font-bold tracking-wide uppercase text-muted mb-2 block">Job Description</label>
+          <textarea id="jd-input"
+            placeholder="Paste the job description here..."
+            class="flex-1 min-h-32 w-full rounded-xl border border-border p-3 text-xs font-body resize-none focus:outline-none focus:border-accent transition-all"
+            style="background:#1a1a1a; color:#f5f2eb;"
+            oninput="checkStep2()"></textarea>
+        </div>
+
+        <!-- Analyze button -->
+        <button id="analyze-btn"
+          onclick="analyzeResume()"
+          disabled
+          class="w-full py-3 rounded-xl font-display font-bold text-sm tracking-wide transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+          style="background:#c8f04a; color:#0d0d0d;">
+          Analyze Resume →
+        </button>
+
+        <!-- Error message -->
+        <div id="error-msg" class="hidden text-xs text-danger text-center font-body"></div>
+
+      </div>
+    </aside>
+
+    <!-- RIGHT PANEL — Output -->
+    <section class="flex-1 flex flex-col overflow-hidden" style="background:#0d0d0d;">
+
+      <!-- Empty state -->
+      <div id="empty-state" class="flex-1 flex flex-col items-center justify-center text-center p-8">
+        <div class="w-16 h-16 rounded-2xl border border-border flex items-center justify-center mb-4" style="background:#111111;">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#3a3a3a" stroke-width="1.5">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </div>
+        <h2 class="font-display text-lg font-bold text-muted">No analysis yet</h2>
+        <p class="text-xs text-muted mt-1 max-w-xs">Upload your resume and paste a job description to get started. We'll analyze your fit, check ATS compatibility, and find learning resources.</p>
+        <div class="flex items-center gap-4 mt-6 text-xs text-muted">
+          <div class="flex items-center gap-1.5">
+            <div class="w-1.5 h-1.5 rounded-full" style="background:#c8f04a;"></div>
+            ATS Check
+          </div>
+          <div class="flex items-center gap-1.5">
+            <div class="w-1.5 h-1.5 rounded-full" style="background:#c8f04a;"></div>
+            Live Job Data
+          </div>
+          <div class="flex items-center gap-1.5">
+            <div class="w-1.5 h-1.5 rounded-full" style="background:#c8f04a;"></div>
+            YouTube Resources
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading state -->
+      <div id="loading-state" class="hidden flex-1 flex flex-col items-center justify-center p-8 gap-6">
+        <div class="flex flex-col items-center gap-3">
+          <div class="w-12 h-12 rounded-2xl flex items-center justify-center" style="background:rgba(200,240,74,0.1);">
+            <svg class="animate-spin" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c8f04a" stroke-width="2">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+          </div>
+          <div class="text-center">
+            <p class="font-display font-bold text-sm" style="color:#c8f04a;" id="loading-step-text">Extracting resume data...</p>
+            <p class="text-xs text-muted mt-1">This takes 20-30 seconds — we're fetching live data</p>
+          </div>
+        </div>
+        <div class="w-64 flex flex-col gap-2">
+          <div class="flex items-center gap-2 text-xs" id="ls-1">
+            <div class="w-4 h-4 rounded-full border border-border flex items-center justify-center text-muted">·</div>
+            <span class="text-muted">Parsing resume</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs" id="ls-2">
+            <div class="w-4 h-4 rounded-full border border-border flex items-center justify-center text-muted">·</div>
+            <span class="text-muted">Checking ATS compatibility</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs" id="ls-3">
+            <div class="w-4 h-4 rounded-full border border-border flex items-center justify-center text-muted">·</div>
+            <span class="text-muted">Searching live job market</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs" id="ls-4">
+            <div class="w-4 h-4 rounded-full border border-border flex items-center justify-center text-muted">·</div>
+            <span class="text-muted">Finding learning resources</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs" id="ls-5">
+            <div class="w-4 h-4 rounded-full border border-border flex items-center justify-center text-muted">·</div>
+            <span class="text-muted">Generating analysis</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result state -->
+      <div id="result-state" class="hidden flex-1 flex flex-col overflow-hidden">
+
+        <!-- Analysis area -->
+        <div class="flex-1 overflow-y-auto p-6 pb-2" id="analysis-scroll">
+
+          <!-- Analysis header -->
+          <div class="flex items-center justify-between mb-4 animate-fade-up">
+            <h2 class="font-display font-bold text-base">Resume Analysis</h2>
+            <span class="text-xs text-muted font-body" id="analysis-timestamp"></span>
+          </div>
+
+          <!-- Analysis content -->
+          <div id="analysis-content" class="analysis-content text-sm leading-relaxed animate-fade-up"></div>
+
+          <!-- Divider -->
+          <div class="my-6 border-t border-border"></div>
+
+          <!-- Chat section -->
+          <div class="animate-fade-up">
+            <div class="flex items-center gap-2 mb-4">
+              <div class="w-6 h-6 rounded-lg flex items-center justify-center" style="background:rgba(200,240,74,0.1);">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#c8f04a" stroke-width="2">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+              </div>
+              <h3 class="font-display font-bold text-sm">Ask a follow-up question</h3>
+            </div>
+
+            <!-- Chat messages -->
+            <div id="chat-messages" class="flex flex-col gap-3 mb-4"></div>
+
+            <!-- Suggested questions -->
+            <div id="suggested-questions" class="flex flex-wrap gap-2 mb-4">
+              <button onclick="sendSuggestion(this)" class="suggestion-btn text-xs px-3 py-1.5 rounded-lg border border-border text-muted hover:border-accent hover:text-accent transition-all font-body">
+                How can I improve my skills section?
+              </button>
+              <button onclick="sendSuggestion(this)" class="suggestion-btn text-xs px-3 py-1.5 rounded-lg border border-border text-muted hover:border-accent hover:text-accent transition-all font-body">
+                Rewrite my experience bullet points
+              </button>
+              <button onclick="sendSuggestion(this)" class="suggestion-btn text-xs px-3 py-1.5 rounded-lg border border-border text-muted hover:border-accent hover:text-accent transition-all font-body">
+                Which skill should I learn first?
+              </button>
+              <button onclick="sendSuggestion(this)" class="suggestion-btn text-xs px-3 py-1.5 rounded-lg border border-border text-muted hover:border-accent hover:text-accent transition-all font-body">
+                How do I pass ATS filters?
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat input -->
+        <div class="border-t border-border p-4 flex gap-3 flex-shrink-0" style="background:#111111;">
+          <input id="chat-input"
+            type="text"
+            placeholder="Ask anything about your resume..."
+            class="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-body focus:outline-none focus:border-accent transition-all"
+            style="background:#1a1a1a; color:#f5f2eb;"
+            onkeydown="if(event.key==='Enter') sendChat()"
+            disabled/>
+          <button id="send-btn"
+            onclick="sendChat()"
+            disabled
+            class="px-4 py-2.5 rounded-xl font-display font-bold text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            style="background:#c8f04a; color:#0d0d0d;">
+            Send
+          </button>
+        </div>
+
+      </div>
+
+    </section>
+  </main>
+
+  <script>
+    // ─── State ───────────────────────────────────────────────
+    const API = 'http://localhost:5000'
+    let sessionId = null
+    let selectedFile = null
+    let loadingInterval = null
+    let loadingStep = 0
+
+    // ─── File Handling ────────────────────────────────────────
+    function handleFileSelect(e) {
+      const file = e.target.files[0]
+      if (file) setFile(file)
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault()
+      document.getElementById('drop-zone').classList.add('drag-over')
+    }
+
+    function handleDragLeave(e) {
+      document.getElementById('drop-zone').classList.remove('drag-over')
+    }
+
+    function handleDrop(e) {
+      e.preventDefault()
+      document.getElementById('drop-zone').classList.remove('drag-over')
+      const file = e.dataTransfer.files[0]
+      if (file && (file.name.endsWith('.pdf') || file.name.endsWith('.docx'))) {
+        setFile(file)
+      }
+    }
+
+    function setFile(file) {
+      selectedFile = file
+      document.getElementById('upload-placeholder').classList.add('hidden')
+      document.getElementById('file-selected').classList.remove('hidden')
+      document.getElementById('file-name').textContent = file.name
+      updateStep(1, 'done')
+      updateStep(2, 'active')
+      checkAnalyzeButton()
+    }
+
+    function checkStep2() {
+      const jd = document.getElementById('jd-input').value.trim()
+      if (jd.length > 50) {
+        updateStep(2, 'done')
+        updateStep(3, 'active')
+      }
+      checkAnalyzeButton()
+    }
+
+    function checkAnalyzeButton() {
+      const jd = document.getElementById('jd-input').value.trim()
+      const btn = document.getElementById('analyze-btn')
+      btn.disabled = !(selectedFile && jd.length > 50)
+    }
+
+    // ─── Step Indicator ──────────────────────────────────────
+    function updateStep(num, state) {
+      const el = document.getElementById(`step-${num}`)
+      const circle = el.querySelector('div')
+      const label = el.querySelector('span')
+      circle.className = 'w-5 h-5 rounded-full border flex items-center justify-center text-xs font-display font-bold'
+      if (state === 'active') {
+        circle.style.cssText = 'color:#c8f04a; border-color:#c8f04a;'
+        label.className = 'step-active'
+        label.style.color = '#c8f04a'
+      } else if (state === 'done') {
+        circle.innerHTML = '✓'
+        circle.style.cssText = 'color:#4ade80; border-color:#4ade80;'
+        label.className = 'step-done'
+        label.style.color = '#4ade80'
+      } else {
+        circle.style.cssText = ''
+        label.className = 'step-pending'
+        label.style.color = '#3a3a3a'
+      }
+    }
+
+    // ─── Loading Steps Animation ──────────────────────────────
+    const loadingSteps = [
+      { id: 'ls-1', text: 'Parsing resume' },
+      { id: 'ls-2', text: 'Checking ATS compatibility' },
+      { id: 'ls-3', text: 'Searching live job market' },
+      { id: 'ls-4', text: 'Finding learning resources' },
+      { id: 'ls-5', text: 'Generating analysis' },
+    ]
+
+    function startLoadingAnimation() {
+      loadingStep = 0
+      loadingSteps.forEach(s => {
+        const el = document.getElementById(s.id)
+        el.querySelector('div').textContent = '·'
+        el.querySelector('div').className = 'w-4 h-4 rounded-full border border-border flex items-center justify-center text-muted'
+        el.querySelector('span').className = 'text-muted'
+      })
+      loadingInterval = setInterval(() => {
+        if (loadingStep < loadingSteps.length) {
+          const s = loadingSteps[loadingStep]
+          const el = document.getElementById(s.id)
+          el.querySelector('div').textContent = '✓'
+          el.querySelector('div').style.cssText = 'color:#4ade80; border-color:#4ade80;'
+          el.querySelector('div').className = 'w-4 h-4 rounded-full border flex items-center justify-center text-xs'
+          el.querySelector('span').className = ''
+          el.querySelector('span').style.color = '#f5f2eb'
+          loadingStep++
+          if (loadingStep < loadingSteps.length) {
+            document.getElementById('loading-step-text').textContent =
+              loadingSteps[loadingStep].text + '...'
+          }
+        }
+      }, 4000)
+    }
+
+    function stopLoadingAnimation() {
+      clearInterval(loadingInterval)
+    }
+
+    // ─── Analyze ──────────────────────────────────────────────
+    async function analyzeResume() {
+      const jd = document.getElementById('jd-input').value.trim()
+      if (!selectedFile || !jd) return
+
+      hideError()
+      showState('loading')
+      startLoadingAnimation()
+
+      document.getElementById('analyze-btn').disabled = true
+      document.getElementById('status-indicator').classList.remove('hidden')
+      document.getElementById('status-indicator').classList.add('flex')
+      document.getElementById('status-text').textContent = 'Analyzing...'
+
+      const formData = new FormData()
+      formData.append('resume', selectedFile)
+      formData.append('jd_text', jd)
+
+      try {
+        const res = await fetch(`${API}/analyze`, {
+          method: 'POST',
+          body: formData
+        })
+        const data = await res.json()
+
+        stopLoadingAnimation()
+
+        if (!res.ok || data.error) {
+          showError(data.error || 'Something went wrong. Please try again.')
+          showState('empty')
+          document.getElementById('analyze-btn').disabled = false
+          return
+        }
+
+        sessionId = data.session_id
+        renderAnalysis(data.analysis)
+        showState('result')
+        updateStep(3, 'done')
+        document.getElementById('status-text').textContent = 'Analysis complete'
+        document.getElementById('reset-btn').classList.remove('hidden')
+        document.getElementById('chat-input').disabled = false
+        document.getElementById('send-btn').disabled = false
+        document.getElementById('analysis-timestamp').textContent =
+          new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+      } catch (err) {
+        stopLoadingAnimation()
+        showError('Could not connect to server. Make sure the backend is running.')
+        showState('empty')
+        document.getElementById('analyze-btn').disabled = false
+      }
+    }
+
+    // ─── Render Analysis ─────────────────────────────────────
+    function renderAnalysis(text) {
+      const html = markdownToHtml(text)
+      document.getElementById('analysis-content').innerHTML = html
+    }
+
+    function markdownToHtml(text) {
+      return text
+        .replace(/### (.+)/g, '<h3>$1</h3>')
+        .replace(/## (.+)/g, '<h2>$1</h2>')
+        .replace(/# (.+)/g, '<h1>$1</h1>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/\[(.+?)\]\((https?:\/\/.+?)\)/g, '<a href="$2" target="_blank">$1</a>')
+        .replace(/(https?:\/\/[^\s<"]+)/g, (url) => {
+          if (url.includes('youtube.com') || url.includes('youtu.be')) {
+            return `<a href="${url}" target="_blank" style="color:#c8f04a;">▶ Watch on YouTube</a>`
+          }
+          return `<a href="${url}" target="_blank">${url}</a>`
+        })
+        .replace(/^\* (.+)/gm, '<li>$1</li>')
+        .replace(/^\d+\. (.+)/gm, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/^(?!<[hul])(.+)$/gm, (line) => {
+          if (line.trim() && !line.startsWith('<')) return `<p>${line}</p>`
+          return line
+        })
+    }
+
+    // ─── Chat ─────────────────────────────────────────────────
+    async function sendChat() {
+      const input = document.getElementById('chat-input')
+      const msg = input.value.trim()
+      if (!msg || !sessionId) return
+
+      input.value = ''
+      document.getElementById('suggested-questions').classList.add('hidden')
+      appendMessage('user', msg)
+      const typingId = appendTyping()
+      document.getElementById('send-btn').disabled = true
+      input.disabled = true
+
+      try {
+        const res = await fetch(`${API}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, session_id: sessionId })
+        })
+        const data = await res.json()
+        removeTyping(typingId)
+
+        if (!res.ok || data.error) {
+          appendMessage('assistant', '⚠️ ' + (data.error || 'Something went wrong.'))
+        } else {
+          appendMessage('assistant', data.response)
+        }
+      } catch (err) {
+        removeTyping(typingId)
+        appendMessage('assistant', '⚠️ Could not reach the server.')
+      }
+
+      document.getElementById('send-btn').disabled = false
+      input.disabled = false
+      input.focus()
+      scrollToBottom()
+    }
+
+    function sendSuggestion(btn) {
+      document.getElementById('chat-input').value = btn.textContent.trim()
+      sendChat()
+    }
+
+    function appendMessage(role, text) {
+      const container = document.getElementById('chat-messages')
+      const div = document.createElement('div')
+      div.className = 'chat-bubble flex gap-3'
+
+      const isUser = role === 'user'
+      const avatarColor = isUser ? '#c8f04a' : '#2a2a2a'
+      const avatarText = isUser ? 'U' : 'AI'
+      const avatarTextColor = isUser ? '#0d0d0d' : '#f5f2eb'
+      const bubbleBg = isUser ? 'rgba(200,240,74,0.08)' : '#1a1a1a'
+      const bubbleBorder = isUser ? 'rgba(200,240,74,0.2)' : '#2a2a2a'
+
+      div.innerHTML = `
+        <div class="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center text-xs font-display font-bold"
+          style="background:${avatarColor}; color:${avatarTextColor};">${avatarText}</div>
+        <div class="flex-1 rounded-xl px-4 py-3 text-sm analysis-content"
+          style="background:${bubbleBg}; border:1px solid ${bubbleBorder};">${markdownToHtml(text)}</div>
+      `
+      container.appendChild(div)
+      scrollToBottom()
+    }
+
+    function appendTyping() {
+      const container = document.getElementById('chat-messages')
+      const id = 'typing-' + Date.now()
+      const div = document.createElement('div')
+      div.id = id
+      div.className = 'chat-bubble flex gap-3'
+      div.innerHTML = `
+        <div class="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center text-xs font-display font-bold"
+          style="background:#2a2a2a; color:#f5f2eb;">AI</div>
+        <div class="rounded-xl px-4 py-3 flex items-center gap-1" style="background:#1a1a1a; border:1px solid #2a2a2a;">
+          <div class="dot w-1.5 h-1.5 rounded-full" style="background:#6b6b6b;"></div>
+          <div class="dot w-1.5 h-1.5 rounded-full" style="background:#6b6b6b;"></div>
+          <div class="dot w-1.5 h-1.5 rounded-full" style="background:#6b6b6b;"></div>
+        </div>
+      `
+      container.appendChild(div)
+      scrollToBottom()
+      return id
+    }
+
+    function removeTyping(id) {
+      const el = document.getElementById(id)
+      if (el) el.remove()
+    }
+
+    function scrollToBottom() {
+      const scroll = document.getElementById('analysis-scroll')
+      scroll.scrollTop = scroll.scrollHeight
+    }
+
+    // ─── UI State ─────────────────────────────────────────────
+    function showState(state) {
+      document.getElementById('empty-state').classList.add('hidden')
+      document.getElementById('loading-state').classList.add('hidden')
+      document.getElementById('result-state').classList.add('hidden')
+
+      if (state === 'empty') document.getElementById('empty-state').classList.remove('hidden')
+      if (state === 'loading') document.getElementById('loading-state').classList.remove('hidden')
+      if (state === 'result') document.getElementById('result-state').classList.remove('hidden')
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error-msg')
+      el.textContent = msg
+      el.classList.remove('hidden')
+    }
+
+    function hideError() {
+      document.getElementById('error-msg').classList.add('hidden')
+    }
+
+    // ─── Reset ────────────────────────────────────────────────
+    function resetApp() {
+      sessionId = null
+      selectedFile = null
+      document.getElementById('file-input').value = ''
+      document.getElementById('jd-input').value = ''
+      document.getElementById('upload-placeholder').classList.remove('hidden')
+      document.getElementById('file-selected').classList.add('hidden')
+      document.getElementById('chat-messages').innerHTML = ''
+      document.getElementById('suggested-questions').classList.remove('hidden')
+      document.getElementById('chat-input').disabled = true
+      document.getElementById('send-btn').disabled = true
+      document.getElementById('analyze-btn').disabled = true
+      document.getElementById('reset-btn').classList.add('hidden')
+      document.getElementById('status-indicator').classList.add('hidden')
+      document.getElementById('status-indicator').classList.remove('flex')
+      hideError()
+      showState('empty')
+      updateStep(1, 'active')
+      updateStep(2, 'pending')
+      updateStep(3, 'pending')
+    }
+  </script>
+</body>
+</html>
