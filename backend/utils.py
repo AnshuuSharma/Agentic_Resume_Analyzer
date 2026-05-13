@@ -89,7 +89,7 @@ def generate_with_retry(prompt, max_retries=3):
         try:
             print(f"Attempt {attempt + 1} — calling Groq...")
             response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=4096
             )
@@ -102,5 +102,24 @@ def generate_with_retry(prompt, max_retries=3):
                 print(f"Rate limit hit, waiting {wait_time}s...")
                 time.sleep(wait_time)
             else:
+                raise e
+    raise Exception("Max retries exceeded. Please try again later.")
+
+def generate_fast(prompt, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                wait_time = 15 * (attempt + 1)
+                print(f"Rate limit hit, waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"EXACT ERROR: {str(e)}")
                 raise e
     raise Exception("Max retries exceeded. Please try again later.")

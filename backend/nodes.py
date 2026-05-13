@@ -1,4 +1,4 @@
-from utils import groq_client , AgentState, generate_with_retry
+from utils import groq_client , AgentState, generate_with_retry, generate_fast
 import json
 from tools import (
     check_ats_compatibility,
@@ -8,11 +8,37 @@ from tools import (
 
 
 def clean_llm_json(text: str) -> str:
+    import re
     text = text.strip()
+    
+    # Remove markdown code blocks
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
             text = text[4:]
+    text = text.strip()
+    
+    # Detect if it is an object or array and extract accordingly
+    obj_start = text.find("{")
+    arr_start = text.find("[")
+    
+    if obj_start != -1 and (arr_start == -1 or obj_start < arr_start):
+        # It is a JSON object
+        end = text.rfind("}")
+        if end != -1:
+            text = text[obj_start:end+1]
+    elif arr_start != -1:
+        # It is a JSON array
+        end = text.rfind("]")
+        if end != -1:
+            text = text[arr_start:end+1]
+    
+    # Remove trailing commas before ] or }
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    
+    # Fix unescaped newlines inside strings
+    text = re.sub(r'(?<!\\)\n(?=[^"]*"(?:[^"]*"[^"]*")*[^"]*$)', ' ', text)
+    
     return text.strip()
 
 def extract_node(state :AgentState):
@@ -50,13 +76,17 @@ Job Description:
 """
 
     
-    result = generate_with_retry(prompt)
+    result = generate_fast(prompt)
+    print(f"RAW EXTRACTION RESULT: {result[:200]}")
     
     try:
         cleaned = clean_llm_json(result)
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
+        print(f"JSON PARSE FAILED: {result[:300]}")
         parsed = {"error": "invalid json from llm", "raw": result}
+
+    print(f"PARSED RESUME KEYS: {list(parsed.get('resume', {}).keys())}")
 
     return {
         **state,
@@ -175,6 +205,9 @@ def chat_node(state : AgentState) -> AgentState:
     {state["user_message"]}
     
     Instructions:
+    - Be concise and direct — maximum 3-4 short paragraphs
+    - No long lists unless specifically asked
+    - Get straight to the point — no lengthy preambles
     - Answer specifically based on THEIR resume and THEIR job description
     - Never give generic advice — always reference actual content
     - If they ask to rewrite something, give a concrete rewritten version
@@ -182,7 +215,7 @@ def chat_node(state : AgentState) -> AgentState:
       to demonstrate it based on what they do have
     - Be encouraging but honest
     """
-    result = generate_with_retry(prompt)
+    result = generate_fast(prompt)
 
     updated_history=state["chat_history"]+[
         {"role":"user","content":state["user_message"]},
@@ -194,18 +227,19 @@ def chat_node(state : AgentState) -> AgentState:
         "chat_history":updated_history
     }
 
-def route_chat(state: AgentState) -> str:
-    user_msg = state.get("user_message", "")
+# def route_chat(state: AgentState) -> str:
+#     user_msg = state.get("user_message", "")
+#     print(f"ROUTE CHAT — user_message: '{user_msg}'")
     
-    if not isinstance(user_msg, str):
-        return "end"
+#     if not isinstance(user_msg, str) or not user_msg.strip():
+#         return "end"
     
-    user_msg = user_msg.lower()
-    end_triggers = ["bye", "exit", "quit", "thanks", "done"]
+#     user_msg = user_msg.lower()
+#     end_triggers = ["bye", "exit", "quit", "thanks", "done"]
     
-    if any(trigger in user_msg for trigger in end_triggers):
-        return "end"
-    return "chat"
+#     if any(trigger in user_msg for trigger in end_triggers):
+#         return "end"
+#     return "chat"
 
 
 def agent_node(state:AgentState) -> AgentState:
@@ -268,10 +302,12 @@ def agent_node(state:AgentState) -> AgentState:
     
     Rules:
     - Only include tools for skills that are genuinely missing from the resume
-    - Maximum 3 missing skills
+    - Maximum 3 missing skills — no more than 3
     - Return empty array [] if no skills are missing
+    - Each skill must be a simple short name like "Docker" not 
+     "RAG (Retrieval-Augmented Generation)"
     """
-    result = generate_with_retry(prompt)
+    result = generate_fast(prompt)
 
     try:
         cleaned = clean_llm_json(result)
@@ -302,13 +338,13 @@ def tool_node(state: AgentState) -> AgentState:
         tool = call.get("tool")
         args = call.get("args", {})
 
-        if tool == "check_ats_compatibility":
-            tool_results["ats"] = check_ats_compatibility(
-                args.get("resume_text", state["resume_text"]),
-                args.get("jd_text", state["jd_text"])
-            )
+        # if tool == "check_ats_compatibility":
+        #     tool_results["ats"] = check_ats_compatibility(
+        #         args.get("resume_text", state["resume_text"]),
+        #         args.get("jd_text", state["jd_text"])
+        #     )
 
-        elif tool == "search_job_market":
+        if tool == "search_job_market":
             result = search_job_market(args.get("skill", ""))
             tool_results["job_market"].append(result)
 
