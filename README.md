@@ -14,17 +14,17 @@ What It Does :
 TECH STACK
 Backend
 
-• Python + Flask
-• LangGraph — stateful agent graph with 5 nodes
-• Groq API — llama-3.1-8b-instant for extraction, llama-3.3-70b-versatile for analysis and chat
-• Adzuna API — live job market data
-• YouTube Data API v3 — free learning resources
-• PyMuPDF + python-docx — resume file parsing
+1) Python + Flask
+2) LangGraph — stateful agent graph with 5 nodes
+3) Groq API — llama-3.1-8b-instant for extraction and chat, llama-3.3-70b-versatile for analysis
+4) Adzuna API — live job market data
+5) YouTube Data API v3 — free learning resources
+6) PyMuPDF + python-docx — resume file parsing
 
 Frontend
 
-• Plain HTML, CSS, JavaScript
-• Tailwind CSS (via CDN)
+1) Plain HTML, CSS, JavaScript
+2) Tailwind CSS (via CDN)
 
 Setup
 
