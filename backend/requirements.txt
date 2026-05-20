@@ -1,5 +1,6 @@
 langgraph
 flask
+flask-cors
 python-dotenv
 langsmith
 python-docx
