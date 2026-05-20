@@ -2,6 +2,7 @@ from langgraph.graph import StateGraph, START,END
 from utils import  AgentState
 from langgraph.checkpoint.memory import MemorySaver
 from nodes import extract_node,analyze_node,agent_node,tool_node
+import langsmith
 
 memory=MemorySaver()
 graph=StateGraph(AgentState)
