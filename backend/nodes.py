@@ -106,40 +106,15 @@ def analyze_node(state : AgentState):
     You are an experienced recruiter and career coach talking directly 
     to a job candidate. Use "you" and "your" — never refer to them 
     in third person.
-    
-    A candidate has submitted their resume for a specific job.
-    You have been provided with structured resume data, job description 
-    data, ATS compatibility results, live job market data, and learning 
-    resources.
 
-   Compare the resume data with the job description data and provide detailed, practical feedback.
+    Compare the resume data with the job description and provide 
+    concise, practical feedback. Skip lengthy introductions.
 
-   Focus on:
+    Resume Data:
+    {json.dumps(state["resume_data"], indent=2)}
 
-   1. Identify missing skills, qualifications, or experience in the resume compared to the job description.
-   - Suggest practical ways to include them (projects, coursework, phrasing, etc.)
-
-   2. Highlight strong points in the resume that align well with the job description.
-
-   3. Provide specific, actionable suggestions to improve the resume.
-   - Avoid generic advice like "improve skills"
-
-   4. Suggest how to rewrite or better present existing experience, projects to match the job description.
-   - Give concrete examples where possible
-
-   Be specific and actionable. Avoid generic advice.
-
-   Structure your response in a clear and readable way using sections,
-   but you are free to decide the section names based on the context.
-
-   If resume_data or jd_data appear empty or malformed, 
-   say so clearly rather than hallucinating content.
-
-   Resume Data:
-   {json.dumps(state["resume_data"], indent=2)}
-
-   Job Description Data:
-   {json.dumps(state["jd_data"], indent=2)}
+    Job Description Data:
+    {json.dumps(state["jd_data"], indent=2)}
 
     === ATS COMPATIBILITY RESULTS ===
     Your resume currently matches {ats.get("match_percentage", "N/A")}% 
@@ -148,20 +123,42 @@ def analyze_node(state : AgentState):
     Keywords you are missing: {ats.get("missing_keywords", [])}
     Formatting Issues: {ats.get("formatting_issues", [])}
     Matched Keywords: {ats.get("matched_keywords", [])}
-    
+
     === LIVE JOB MARKET DATA FOR MISSING SKILLS ===
     {json.dumps(job_market, indent=2)}
 
     === LEARNING RESOURCES FOR MISSING SKILLS ===
     {json.dumps(youtube, indent=2)}
 
-    Based on all the data above, provide a detailed and actionable 
-    resume analysis. Structure your response however makes most sense 
-    for this specific resume and job description.
-    Use all the data provided above including ATS results, job market
-    data and learning resources in your analysis.
-    Include the full YouTube URLs and video title from the learning resources above
+    Structure your response with these sections in order:
 
+    1. ATS Score — state the exact match percentage and whether it passed.
+       List the top missing keywords the candidate should add.
+
+    2. Strong Points — what aligns well with the JD.
+
+    3. Skill Gaps — for each missing skill mention:
+       - How many jobs demand it (from job market data above)
+       - One practical way to demonstrate it
+
+    4. Learning Resources — for each missing skill list the 
+       YouTube video title and full URL from the data above.
+       Only include videos actually provided above.
+
+    5. Resume Rewrites — rewrite 2-3 existing bullet points 
+       to better match the JD using only what is in the resume.
+
+    CRITICAL RULES:
+    - Every rewrite must be based ONLY on what is explicitly 
+      stated in the resume data — never invent new content
+    - Never add technologies not mentioned in the original resume
+    - If suggesting something new phrase it as "Consider adding 
+      X if you actually did this"
+    - When evaluating skills check BOTH skills list AND project 
+      descriptions — if a skill appears in a project it counts
+    - Never say a skill has no evidence if it appears in projects
+    - Do not use markdown tables
+    - No lengthy introductions
     """
     result = generate_with_retry(prompt)
 
@@ -175,72 +172,66 @@ def compress_history(history: list, max_turns: int = 6) -> list:
         return history
     return history[:2] + history[-(max_turns * 2 - 2):]
 
-def chat_node(state : AgentState) -> AgentState:
-    compressed=compress_history(state["chat_history"])
+def chat_node(state: AgentState) -> AgentState:
+    compressed = compress_history(state["chat_history"])
 
-    history_text=""
+    history_text = ""
     for msg in compressed:
-        role="User" if msg["role"] == "user" else "Assistant"
-        history_text += f"{role} : {msg['content']}\n"
+        role = "User" if msg["role"] == "user" else "Assistant"
+        history_text += f"{role}: {msg['content']}\n"
 
-    prompt=f"""
-    You are a professional resume coach and career advisor.
-    
-    You have already analyzed the user's resume against a job description.
-    Use this context to answer their questions specifically and accurately.
-    
-    === RESUME DATA ===
-    {json.dumps(state["resume_data"], indent=2)}
-    
-    === JOB DESCRIPTION DATA ===
-    {json.dumps(state["jd_data"], indent=2)}
-    
-    === INITIAL ANALYSIS ===
-    {state["analysis"]}
-    
-    === CONVERSATION SO FAR ===
-    {history_text}
-    
-    === USER'S CURRENT MESSAGE ===
-    {state["user_message"]}
-    
-    Instructions:
-    - Be concise and direct — maximum 3-4 short paragraphs
-    - No long lists unless specifically asked
-    - Get straight to the point — no lengthy preambles
-    - Answer specifically based on THEIR resume and THEIR job description
-    - Never give generic advice — always reference actual content
-    - If they ask to rewrite something, give a concrete rewritten version
-    - If they ask about a skill they don't have, suggest realistic ways 
-      to demonstrate it based on what they do have
-    - Be encouraging but honest
-    """
-    result = generate_fast(prompt)
+    resume_skills = state["resume_data"].get("skills", [])
+    resume_experience = state["resume_data"].get("experience", [])
+    resume_projects = state["resume_data"].get("projects", [])
+    required_skills = state["jd_data"].get("required_skills", [])
+    preferred_skills = state["jd_data"].get("preferred_skills", [])
 
-    updated_history=state["chat_history"]+[
-        {"role":"user","content":state["user_message"]},
-        {"role":"assistant","content":result}
+    missing_skills = [
+        s for s in required_skills + preferred_skills
+        if s.lower() not in [r.lower() for r in resume_skills]
     ]
 
-    return {
-        **state,
-        "chat_history":updated_history
-    }
+    prompt = f"""
+    You are a professional resume coach. Be concise and direct.
+    Maximum 3-4 short paragraphs. No markdown tables.
 
-# def route_chat(state: AgentState) -> str:
-#     user_msg = state.get("user_message", "")
-#     print(f"ROUTE CHAT — user_message: '{user_msg}'")
-    
-#     if not isinstance(user_msg, str) or not user_msg.strip():
-#         return "end"
-    
-#     user_msg = user_msg.lower()
-#     end_triggers = ["bye", "exit", "quit", "thanks", "done"]
-    
-#     if any(trigger in user_msg for trigger in end_triggers):
-#         return "end"
-#     return "chat"
+    CANDIDATE'S ACTUAL SKILLS: {resume_skills}
+    CANDIDATE'S EXPERIENCE: {resume_experience}
+    CANDIDATE'S PROJECTS: {resume_projects}
+    JOB REQUIRES: {required_skills}
+    JOB PREFERS: {preferred_skills}
+    GENUINELY MISSING SKILLS: {missing_skills}
 
+    CRITICAL RULES:
+    - Only reference skills actually listed above
+    - Never suggest learning a skill already in CANDIDATE'S ACTUAL SKILLS
+    - Never fabricate experience not mentioned above
+    - If a skill appears in JOB REQUIRES it IS a requirement
+    - Base every answer strictly on the data above
+    - Do not use markdown tables
+    - Every rewrite must be based ONLY on what is explicitly 
+    stated in the resume data provided
+    - Never add technologies, responsibilities, or achievements
+    that are not mentioned in the original resume
+    - If you want to suggest adding something new, phrase it as
+    "Consider adding X if you actually did this" — never present
+    fabricated content as a rewrite of existing experience
+    - Rewriting means rephrasing what exists — not inventing new content
+
+    CONVERSATION SO FAR:
+    {history_text}
+
+    USER MESSAGE: {state["user_message"]}
+    """
+
+    result = generate_with_retry(prompt)
+
+    updated_history = state["chat_history"] + [
+        {"role": "user", "content": state["user_message"]},
+        {"role": "assistant", "content": result}
+    ]
+
+    return {**state, "chat_history": updated_history}
 
 def agent_node(state:AgentState) -> AgentState:
     tools = [
@@ -314,6 +305,7 @@ def agent_node(state:AgentState) -> AgentState:
         tool_calls = json.loads(cleaned)
         if not isinstance(tool_calls, list):
             tool_calls = []
+        tool_calls = tool_calls[:6]
     except json.JSONDecodeError:
         print(f"Failed to parse tool calls JSON: {result}")
         tool_calls = []
