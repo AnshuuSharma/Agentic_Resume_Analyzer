@@ -159,6 +159,10 @@ def analyze_node(state : AgentState):
     - Never say a skill has no evidence if it appears in projects
     - Do not use markdown tables
     - No lengthy introductions
+    - For missing skills suggest learning them as new skills
+      not rewriting existing experience to include them
+    - Phrase new suggestions as "To add this skill, consider 
+      building a small project with X"
     """
     result = generate_with_retry(prompt)
 
