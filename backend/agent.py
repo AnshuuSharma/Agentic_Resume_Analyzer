@@ -19,16 +19,6 @@ graph.add_edge("agent", "tools")
 graph.add_edge("tools", "analyze")      
 graph.add_edge("analyze",END)
 
-# graph.add_conditional_edges(
-#     "chat",
-#     route_chat,
-#     {
-#         "chat": "chat",
-#         "end": END
-#     }
-# )
-
-
 app=graph.compile()
 
 

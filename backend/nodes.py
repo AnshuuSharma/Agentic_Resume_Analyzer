@@ -1,5 +1,7 @@
-from utils import groq_client , AgentState, generate_with_retry, generate_fast
+import re
 import json
+import time
+from utils import groq_client, AgentState, generate_with_retry, generate_fast
 from tools import (
     check_ats_compatibility,
     search_job_market,
@@ -7,41 +9,66 @@ from tools import (
 )
 
 
+FAST_MODEL = "openai/gpt-oss-20b"
+
+
 def clean_llm_json(text: str) -> str:
-    import re
     text = text.strip()
-    
-    # Remove markdown code blocks
+
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
             text = text[4:]
     text = text.strip()
-    
-    # Detect if it is an object or array and extract accordingly
+
     obj_start = text.find("{")
     arr_start = text.find("[")
-    
+
     if obj_start != -1 and (arr_start == -1 or obj_start < arr_start):
-        # It is a JSON object
         end = text.rfind("}")
         if end != -1:
-            text = text[obj_start:end+1]
+            text = text[obj_start:end + 1]
     elif arr_start != -1:
-        # It is a JSON array
         end = text.rfind("]")
         if end != -1:
-            text = text[arr_start:end+1]
-    
-    # Remove trailing commas before ] or }
+            text = text[arr_start:end + 1]
+
     text = re.sub(r',\s*([}\]])', r'\1', text)
-    
-    # Fix unescaped newlines inside strings
+
     text = re.sub(r'(?<!\\)\n(?=[^"]*"(?:[^"]*"[^"]*")*[^"]*$)', ' ', text)
-    
+
     return text.strip()
 
-def extract_node(state :AgentState):
+
+
+def get_missing_skills(resume_data: dict, target_skills: list) -> list:
+    """
+    Returns items from target_skills that aren't covered anywhere in the
+    resume — checked against the skills list AND project/experience text,
+    so a skill only mentioned inside a project still counts as covered.
+    """
+    resume_skills = resume_data.get("skills", [])
+    resume_skills_lower = {s.lower().strip() for s in resume_skills if isinstance(s, str)}
+
+    text_blobs = resume_data.get("projects", []) + resume_data.get("experience", [])
+    combined_text = " ".join(str(b) for b in text_blobs).lower()
+
+    missing = []
+    for skill in target_skills:
+        if not isinstance(skill, str):
+            continue
+        skill_lower = skill.lower().strip()
+        if skill_lower in resume_skills_lower:
+            continue
+        if skill_lower and skill_lower in combined_text:
+            continue
+        missing.append(skill)
+
+    return missing
+
+
+
+def extract_node(state: AgentState):
     prompt = f"""
     You are an information extraction system.
 
@@ -75,28 +102,99 @@ Job Description:
 {state["jd_text"]}
 """
 
-    
-    result = generate_fast(prompt)
-    print(f"RAW EXTRACTION RESULT: {result[:200]}")
-    
-    try:
-        cleaned = clean_llm_json(result)
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        print(f"JSON PARSE FAILED: {result[:300]}")
-        parsed = {"error": "invalid json from llm", "raw": result}
+    parsed = None
+    last_raw = None
 
-    print(f"PARSED RESUME KEYS: {list(parsed.get('resume', {}).keys())}")
+  
+    for attempt in range(2):
+        if attempt == 0:
+            result = generate_with_retry(prompt)
+        else:
+            result = generate_fast(
+                prompt + "\n\nYour previous response was not valid JSON. "
+                         "Return ONLY valid JSON and nothing else."
+            )
+
+        last_raw = result
+        print(f"RAW EXTRACTION RESULT (attempt {attempt + 1}): {result[:200]}")
+
+        try:
+            cleaned = clean_llm_json(result)
+            parsed = json.loads(cleaned)
+            break
+        except json.JSONDecodeError:
+            print(f"JSON PARSE FAILED (attempt {attempt + 1}): {result[:300]}")
+            parsed = None
+
+    if parsed is None:
+   
+        return {
+            **state,
+            "resume_data": {},
+            "jd_data": {},
+            "extraction_failed": True,
+            "extraction_error": last_raw,
+        }
+
+    resume_data = parsed.get("resume", {}) or {}
+    jd_data = parsed.get("job_description", {}) or {}
+
+   
+    for field in ["skills", "education", "experience", "projects", "achievements", "certifications"]:
+        if not isinstance(resume_data.get(field), list):
+            resume_data[field] = []
+
+    for field in ["required_skills", "preferred_skills", "qualifications", "responsibilities"]:
+        if not isinstance(jd_data.get(field), list):
+            jd_data[field] = []
+
+    print(f"PARSED RESUME KEYS: {list(resume_data.keys())}")
 
     return {
         **state,
-        "resume_data": parsed.get("resume", {}),
-        "jd_data": parsed.get("job_description", {})
+        "resume_data": resume_data,
+        "jd_data": jd_data,
+        "extraction_failed": False,
     }
 
 
+def _extract_section(text: str, heading: str, stop_headings: list) -> str:
+    stop_pattern = "|".join(re.escape(h) for h in stop_headings)
+    pattern = rf"{re.escape(heading)}.*?(?=(?:{stop_pattern})|$)"
+    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+    return match.group(0) if match else ""
 
-def analyze_node(state : AgentState):
+
+def _flag_possible_fabrications(rewrites_text: str, resume_data: dict) -> list:
+    if not rewrites_text:
+        return []
+
+    vocab = {s.lower().strip() for s in resume_data.get("skills", []) if isinstance(s, str)}
+    text_blobs = (
+        resume_data.get("experience", [])
+        + resume_data.get("projects", [])
+        + resume_data.get("achievements", [])
+    )
+    combined_text = " ".join(str(b) for b in text_blobs).lower()
+
+
+    candidates = set(re.findall(r"\b[A-Z][a-zA-Z0-9\.\+#]{1,}\b", rewrites_text))
+
+    ignore = {"The", "This", "Consider", "Resume", "Rewrite", "Rewrites", "JD"}
+
+    flagged = []
+    for term in candidates:
+        if term in ignore:
+            continue
+        term_lower = term.lower()
+        if term_lower in vocab or term_lower in combined_text:
+            continue
+        flagged.append(term)
+
+    return flagged
+
+
+def analyze_node(state: AgentState):
     tool_results = state.get("tool_results", {})
     print(f"TOOL RESULTS: {json.dumps(tool_results, indent=2)}")
     ats = tool_results.get("ats", {})
@@ -162,15 +260,28 @@ def analyze_node(state : AgentState):
     """
     result = generate_with_retry(prompt)
 
+    rewrites_section = _extract_section(result, "5. Resume Rewrites", ["6.", "\Z"])
+    flagged_terms = _flag_possible_fabrications(rewrites_section, state["resume_data"])
+
+    if flagged_terms:
+        print(f"POSSIBLE FABRICATION WARNING — terms not found in resume data: {flagged_terms}")
+        result += (
+            "\n\n[Auto-check: " + ", ".join(flagged_terms) + " appear in the "
+            "rewrites above but weren't found in your original resume data. "
+            "Double-check these weren't added by mistake.]"
+        )
+
     return {
         **state,
         "analysis": result
     }
 
+
 def compress_history(history: list, max_turns: int = 6) -> list:
     if len(history) <= max_turns * 2:
         return history
     return history[:2] + history[-(max_turns * 2 - 2):]
+
 
 def chat_node(state: AgentState) -> AgentState:
     compressed = compress_history(state["chat_history"])
@@ -186,10 +297,7 @@ def chat_node(state: AgentState) -> AgentState:
     required_skills = state["jd_data"].get("required_skills", [])
     preferred_skills = state["jd_data"].get("preferred_skills", [])
 
-    missing_skills = [
-        s for s in required_skills + preferred_skills
-        if s.lower() not in [r.lower() for r in resume_skills]
-    ]
+    missing_skills = get_missing_skills(state["resume_data"], required_skills + preferred_skills)
 
     prompt = f"""
     You are a professional resume coach. Be concise and direct.
@@ -233,9 +341,30 @@ def chat_node(state: AgentState) -> AgentState:
 
     return {**state, "chat_history": updated_history}
 
-def agent_node(state:AgentState) -> AgentState:
+
+
+def _call_agent_with_tools(prompt: str, tools: list, max_retries: int = 3):
+    for attempt in range(max_retries):
+        try:
+            return groq_client.chat.completions.create(
+                model=FAST_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                tools=tools,
+                tool_choice="auto",
+            )
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                wait_time = 15 * (attempt + 1)
+                print(f"Rate limit hit, waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"EXACT ERROR: {str(e)}")
+                raise e
+    raise Exception("Max retries exceeded. Please try again later.")
+
+
+def agent_node(state: AgentState) -> AgentState:
     tools = [
-        
         {
             "type": "function",
             "function": {
@@ -243,9 +372,7 @@ def agent_node(state:AgentState) -> AgentState:
                 "description": "Searches live job postings for a skill. Use to find how in-demand a missing skill is.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "skill": {"type": "string"}
-                    },
+                    "properties": {"skill": {"type": "string"}},
                     "required": ["skill"]
                 }
             }
@@ -257,61 +384,63 @@ def agent_node(state:AgentState) -> AgentState:
                 "description": "Finds YouTube tutorials for a skill. Use when user needs to learn a missing skill.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "skill": {"type": "string"}
-                    },
+                    "properties": {"skill": {"type": "string"}},
                     "required": ["skill"]
                 }
             }
         }
     ]
+
+    resume_data = state["resume_data"]
+    required_skills = state["jd_data"].get("required_skills", [])
+    preferred_skills = state["jd_data"].get("preferred_skills", [])
+
+
+    missing_skills = get_missing_skills(resume_data, required_skills + preferred_skills)[:3]
+
+    if not missing_skills:
+        print("NO MISSING SKILLS — SKIPPING TOOL CALLS")
+        return {**state, "tool_calls": []}
+
     prompt = f"""
-    You are a resume analysis agent.
-    
-    You have access to tools to analyze a resume against a job description.
-    
-    Resume skills: {state["resume_data"].get("skills", [])}
-    Required skills: {state["jd_data"].get("required_skills", [])}
-    Preferred skills: {state["jd_data"].get("preferred_skills", [])}
-    
-    Use your tools to gather all necessary information
-    for a comprehensive resume analysis.
+    You are a resume analysis agent. Use your tools to gather job market
+    and learning resource data for the candidate's missing skills.
 
-    Return ONLY a valid JSON array of tool calls. No explanation. No markdown.
-    
-    Available tools:
-    - search_job_market: searches live job postings for a skill
-    - find_youtube_resources: finds YouTube tutorials for a skill
-    
-    Example output:
-    [
-        {{"tool": "search_job_market", "args": {{"skill": "Docker"}}}},
-        {{"tool": "find_youtube_resources", "args": {{"skill": "Docker"}}}},
-        {{"tool": "search_job_market", "args": {{"skill": "Kubernetes"}}}},
-        {{"tool": "find_youtube_resources", "args": {{"skill": "Kubernetes"}}}}
-    ]
-    
-    Rules:
-    - Only include tools for skills that are genuinely missing from the resume
-    - Maximum 3 missing skills — no more than 3
-    - Return empty array [] if no skills are missing
-    - Each skill must be a simple short name like "Docker" not 
-     "RAG (Retrieval-Augmented Generation)"
+    Genuinely missing skills: {missing_skills}
+
+    For each skill listed above, call both search_job_market and
+    find_youtube_resources exactly once. Do not call tools for any
+    skill not in that list.
     """
-    result = generate_fast(prompt)
 
-    try:
-        cleaned = clean_llm_json(result)
-        tool_calls = json.loads(cleaned)
-        if not isinstance(tool_calls, list):
-            tool_calls = []
-        tool_calls = tool_calls[:6]
-    except json.JSONDecodeError:
-        print(f"Failed to parse tool calls JSON: {result}")
-        tool_calls = []
+    response = _call_agent_with_tools(prompt, tools)
+
+    raw_tool_calls = response.choices[0].message.tool_calls or []
+
+    tool_calls = []
+    seen = set() 
+
+    for call in raw_tool_calls:
+        try:
+            args = json.loads(call.function.arguments)
+        except (json.JSONDecodeError, AttributeError):
+            print(f"COULD NOT PARSE TOOL CALL ARGS: {call}")
+            continue
+
+        skill = str(args.get("skill", "")).strip()
+        if not skill:
+            continue
+
+        key = (call.function.name, skill.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+
+        tool_calls.append({"tool": call.function.name, "args": {"skill": skill}})
 
     print(f"TOOL CALLS DECIDED: {tool_calls}")
     return {**state, "tool_calls": tool_calls}
+
 
 
 def tool_node(state: AgentState) -> AgentState:
@@ -321,28 +450,34 @@ def tool_node(state: AgentState) -> AgentState:
         "youtube_resources": []
     }
 
-    tool_results["ats"] = check_ats_compatibility(
-        state["resume_data"],
-        state["jd_data"]
-    )
+    try:
+        tool_results["ats"] = check_ats_compatibility(
+            state["resume_data"],
+            state["jd_data"]
+        )
+    except Exception as e:
+        print(f"ATS CHECK FAILED: {e}")
+        tool_results["ats"] = {}
 
     for call in state.get("tool_calls", []):
         tool = call.get("tool")
-        args = call.get("args", {})
-
-        # if tool == "check_ats_compatibility":
-        #     tool_results["ats"] = check_ats_compatibility(
-        #         args.get("resume_text", state["resume_text"]),
-        #         args.get("jd_text", state["jd_text"])
-        #     )
+        skill = call.get("args", {}).get("skill", "")
 
         if tool == "search_job_market":
-            result = search_job_market(args.get("skill", ""))
-            tool_results["job_market"].append(result)
+            try:
+                result = search_job_market(skill)
+                tool_results["job_market"].append(result)
+            except Exception as e:
+                print(f"JOB MARKET SEARCH FAILED for '{skill}': {e}")
+                
 
         elif tool == "find_youtube_resources":
-            result = find_youtube_resources(args.get("skill", ""))
-            tool_results["youtube_resources"].append(result)
+            try:
+                result = find_youtube_resources(skill)
+                tool_results["youtube_resources"].append(result)
+            except Exception as e:
+                print(f"YOUTUBE SEARCH FAILED for '{skill}': {e}")
+                
 
     return {
         **state,
